@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README_zh.md)
 
-A read-only dashboard for the NanoKVM Go, on the panel and in a browser:
+A dashboard for the NanoKVM Go, on the panel and in a browser:
 
 - **Target host:** HDMI input (signal, resolution, frame rate, H.264 stream,
   whether someone is viewing the KVM page) and the USB link that carries
@@ -13,6 +13,8 @@ A read-only dashboard for the NanoKVM Go, on the panel and in a browser:
   signal, band and channel, link rate), Tailscale state and how many peers are
   online, interfaces, connectivity checks, and ping / DNS lookup tools
 - **Processes:** the busiest processes by CPU, like `top`
+- **Settings:** how pages are turned, automatic screen off, and the targets
+  of the connectivity checks, on the panel and on the web page
 
 Logs and the names or addresses of other Tailscale devices are deliberately
 not shown, because the page has no password.
@@ -21,9 +23,14 @@ not shown, because the page has no password.
 
 ## Panel
 
-Tap the right half of the screen (or swipe left / up) for the next page, the
-left half (or swipe right / down) for the previous one. Swipes that start at a
-side edge stay reserved for the host's exit gesture.
+By default, swipe left for the next page and right for the previous one. With
+**Tap** paging (see [Settings](#settings)), tap the right half of the screen
+for the next page and the left half for the previous one; swiping still
+works. The new page slides in from the side. Swipes that start at a side
+edge stay reserved for the host's exit gesture.
+
+The panel only reports a swipe once the finger lifts, so the page slides
+after the gesture instead of following the finger.
 
 | Page | Shows |
 | --- | --- |
@@ -33,35 +40,55 @@ side edge stay reserved for the host's exit gesture.
 | HEALTH | CPU with a sparkline, memory, disk, temperature, uptime |
 | NETWORK | Gateway / internet / DNS latency and the active interfaces |
 | TOP | Busiest processes |
+| SETTINGS | Paging, auto screen off and its delay; tap a row to change it |
 
 Large numbers use a small seven-segment face drawn with rectangles, which
 stays readable on the panel; `qr.py` is a minimal QR encoder for the WEB page.
 
-![The six panel pages](../_docs/dashboard/panel.png)
+![The seven panel pages](../_docs/dashboard/panel.png)
 
 HDMI counts as connected when the NanoKVM reports a valid input resolution.
 Capture itself only runs while someone has the KVM page open, so the HOST
 page shows `IDLE` (and the web page "Capture: Idle") the rest of the time;
 resolution and frame rate are still shown.
 
+### Auto screen off
+
+With auto screen off enabled (the default), the panel goes black after 1
+minute without touch (30 seconds, 5 or 10 minutes can be chosen). The next
+touch only wakes it and does not change the page. Sampling, the connectivity
+checks and the web page keep running while the panel is dark.
+
+`appbase` has no backlight control, so the screen is drawn black and not
+redrawn until it wakes; the backlight itself stays on.
+
 ## Web page
 
 While the App is open, open `http://<LAN IP>:8080/apps/dashboard/` from any
 device on the same network, or scan the QR code on the WEB page;
-`http://<LAN IP>:8080/` redirects there. The dashboard has five tabs
-(Overview, Target host, System, Network, Processes), refreshes every 2 seconds
-and draws CPU, memory, temperature and network charts for the last 10 minutes.
-Theme can be System, Light or Dark, remembered per browser. It is plain
-HTML/CSS/JS with no external resources, so it works without internet access.
+`http://<LAN IP>:8080/` redirects there. The dashboard has six tabs
+(Overview, Target host, System, Network, Processes, Settings), refreshes every
+2 seconds and draws CPU, memory, temperature and network charts for the last
+10 minutes. Theme can be System, Light or Dark, remembered per browser. It is
+plain HTML/CSS/JS with no external resources, so it works without internet
+access.
 
 | Target host | System |
 | --- | --- |
 | ![Target host tab](../_docs/dashboard/web-target.png) | ![System tab](../_docs/dashboard/web-system.png) |
 | **Network** | **Processes** |
 | ![Network tab](../_docs/dashboard/web-network.png) | ![Processes tab](../_docs/dashboard/web-processes.png) |
+| **Settings** | |
+| ![Settings tab](../_docs/dashboard/web-settings.png) | |
+
+On a phone, labels sit above their values, the tab bar scrolls sideways and
+wide tables scroll inside their card, so nothing is squeezed into one-word
+lines.
 
 <details>
-<summary>Dark theme</summary>
+<summary>Phone and dark theme</summary>
+
+![Network, System and Settings tabs on a 360 px wide phone](../_docs/dashboard/web-mobile.png)
 
 ![Overview tab, dark theme](../_docs/dashboard/web-overview-dark.png)
 
@@ -79,13 +106,24 @@ The built-in NanoKVM web server (ports 80/443) has no way for an App to add
 pages without changing system files, so the App serves its own port. The page
 uses relative URLs, so it also works behind a reverse proxy under any path.
 
+Open the page by the device's IP address, its host name, `<host name>.local`
+or its Tailscale MagicDNS name (`<host name>.<tailnet>.ts.net`); any other
+name in the address bar gets `403`. This stops another web site from reading
+the page or changing settings by pointing its own domain at the device (DNS
+rebinding). A reverse proxy must therefore send one of those names (or the
+IP) as `Host`. The `POST` endpoints also only accept `application/json`, so a
+page on another site cannot post to them from your browser.
+
 > **No password.** Anyone on the same network can read the page while the App
 > is open, including IP and MAC addresses, Wi-Fi network name and process
-> names. Logs, command lines and other Tailscale devices are never shown.
-> Close the App when you don't need it.
+> names, and can change the [settings](#settings). Logs, command lines and
+> other Tailscale devices are never shown. Close the App when you don't need
+> it.
 
 JSON is available at `/apps/dashboard/api/status` (current snapshot plus
-history newer than `?since=<seq>`) and `/apps/dashboard/api/history`.
+history newer than `?since=<seq>`), `/apps/dashboard/api/history` and
+`/apps/dashboard/api/settings` (`GET` to read; `POST` a JSON object with the
+settings to change). `POST` requests must be sent as `application/json`.
 
 ## Performance
 
@@ -94,7 +132,7 @@ files on that path. Slow work (network probes, DNS, `ping`, `iw`, the local
 streamer status, `tailscale`) runs in a background thread every 5 seconds.
 Web-only details (services, Tailscale, DNS servers) are refreshed every 15
 seconds and the process list every 2 seconds, and only while the web page (or,
-for processes, the TOP page) is open.
+for processes, the TOP page on a lit panel) is open.
 
 ## Connectivity checks
 
@@ -103,21 +141,32 @@ Every 5 seconds, in a background thread:
 | Check | Method |
 | --- | --- |
 | Gateway | TCP connect to port 80. A refused connection still counts as reachable. If the connection times out, `ping` is tried once when available. Without `ping` the result shows as unknown rather than failed. |
-| Internet | TCP connect to `DASHBOARD_PROBE_HOST` port 443. |
-| DNS | Resolves `DASHBOARD_DNS_NAME`. A lookup taking more than 3 s counts as failed. |
+| Internet | TCP connect to the internet check IP (default `1.1.1.1`) port 443. |
+| DNS | Resolves the DNS check host name (default `www.cloudflare.com`). A lookup taking more than 3 s counts as failed. |
 
-## Configuration
+## Settings
 
-Set these in the web UI under **Settings > Apps**:
+Change these on the panel's SETTINGS page or on the web page's Settings tab.
+They are saved in `settings.json` in the App directory, kept across
+restarts, and apply right away.
+
+| Setting | Default | Where | Description |
+| --- | --- | --- | --- |
+| Turn pages by | Swipe | Panel, web | Swipe: left / right swipe. Tap: tap the left / right half; swiping still works. |
+| Turn the screen off | On | Panel, web | Turn the panel off after a while without touch. |
+| Turn off after | 1 minute | Panel, web | 30 seconds, 1, 5 or 10 minutes. |
+| Internet check IP | `1.1.1.1` | Web | IP address for the internet check. An IP, not a host name, so this check does not depend on DNS. |
+| DNS check host name | `www.cloudflare.com` | Web | Host name used for the DNS check. |
+
+Leave the internet check IP or the DNS check host name empty to turn that
+check off. If `settings.json` is missing or damaged, the defaults are used and
+the problem is written to the App log.
+
+The web port is set in the NanoKVM web UI under **Settings > Apps**:
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `DASHBOARD_WEB_PORT` | `8080` | Port of the web page. If the port is busy, the panel shows `PORT ... IN USE` and keeps working. |
-| `DASHBOARD_PROBE_HOST` | `1.1.1.1` | IP address for the internet check. Use an IP, not a host name, so this check does not depend on DNS. |
-| `DASHBOARD_DNS_NAME` | `www.sipeed.com` | Host name used for the DNS check. |
-
-Set `DASHBOARD_PROBE_HOST` or `DASHBOARD_DNS_NAME` to an empty value to turn that check off.
-Configuration errors are written to the App log.
 
 ## Development
 
@@ -125,7 +174,9 @@ Configuration errors are written to the App log.
 python -m unittest discover -s dashboard -p "test_*.py"
 ```
 
-`collector.py` only uses the Python standard library and imports on any OS. Its
-parsers take file text, so they can be tested without a device.
-`DASHBOARD_DEBUG=1` prints the longest UI tick every 10 seconds to stderr.
-The screenshots in `_docs/dashboard/` use made-up addresses.
+`collector.py`, `settings.py` and `slide.py` only use the Python standard
+library and import on any OS. The collector's parsers take file text, so they
+can be tested without a device; the slide tests use a fake framebuffer in
+every rotation. `DASHBOARD_DEBUG=1` prints the longest UI tick every 10
+seconds to stderr. The screenshots in `_docs/dashboard/` use made-up
+addresses.

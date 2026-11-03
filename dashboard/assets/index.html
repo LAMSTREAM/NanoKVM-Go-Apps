@@ -119,13 +119,15 @@
   .pill.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
   .pill.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
   .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pills.end { justify-content: flex-end; }
 
-  dl.facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0; font-size: 14px; }
-  dl.facts dt { color: var(--muted); }
-  dl.facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  dl.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 14px; }
+  dl.facts dt { color: var(--muted); white-space: nowrap; }
+  dl.facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: break-word; min-width: 0; }
 
   .probes { display: grid; gap: 10px; }
-  .probe { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
+  .probe { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+  .probe > div { min-width: 0; }
   .probe .name { font-weight: 600; }
   .probe .target { color: var(--muted); font: 13px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -173,8 +175,50 @@
   .tool-out { margin-top: 12px; font-size: 14px; min-height: 22px; }
   .tool-out.error { color: var(--bad); }
 
+  .settings { display: grid; gap: 16px; }
+  .setting { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; }
+  .setting > div:first-child { flex: 1 1 220px; min-width: 0; }
+  .setting .name { font-weight: 600; }
+  .setting select, .field input {
+    padding: 7px 10px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif;
+  }
+  .setting select:disabled { opacity: .5; }
+  .switch { position: relative; width: 44px; height: 26px; flex: none; }
+  .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--track); transition: background-color .2s; pointer-events: none; }
+  .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: var(--shadow); transition: transform .2s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(18px); }
+  .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .field { display: grid; gap: 4px; }
+  .field label { font-weight: 600; }
+  .field input { font-family: var(--mono); width: 100%; }
+  .field input[aria-invalid="true"] { border-color: var(--bad); }
+  .field .error { color: var(--bad); font-size: 13px; }
+  .actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .actions button { border: 0; border-radius: 8px; padding: 7px 16px; background: var(--accent); color: #fff; font: 600 13px system-ui, sans-serif; cursor: pointer; }
+  .actions button:disabled { opacity: .5; cursor: progress; }
+  .saved { font-size: 13px; color: var(--muted); }
+  .saved.error { color: var(--bad); }
+
   footer { margin-top: 18px; font-size: 12px; color: var(--muted); text-align: center; }
-  @media (prefers-reduced-motion: reduce) { .bar > span { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .bar > span, .switch span, .switch span::after { transition: none; } }
+
+  /* phones: label above value, so neither column squeezes the other */
+  @media (max-width: 480px) {
+    main { padding: 0 12px 32px; }
+    .grid { gap: 12px; }
+    .card { padding: 14px; }
+    header { padding-top: 14px; }
+    dl.facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    dl.facts dt { font-size: 12px; margin-top: 10px; }
+    dl.facts dt:first-of-type { margin-top: 0; }
+    dl.facts dd { text-align: left; }
+    dl.facts dd .pills.end { justify-content: flex-start; }
+    .tool input { flex-basis: 100%; }
+    .tool button { flex: 1; }
+  }
 </style>
 </head>
 <body>
@@ -201,6 +245,7 @@
     <button type="button" role="tab" data-tab="system">System</button>
     <button type="button" role="tab" data-tab="network">Network</button>
     <button type="button" role="tab" data-tab="processes">Processes</button>
+    <button type="button" role="tab" data-tab="settings">Settings</button>
   </nav>
 
   <!-- Overview ------------------------------------------------------------>
@@ -241,7 +286,7 @@
       <dl class="facts" style="margin-top:14px">
         <dt>Link state</dt><dd id="usb-state">--</dd>
         <dt>Speed</dt><dd id="usb-speed">--</dd>
-        <dt>Emulated devices</dt><dd><div class="pills" id="usb-functions" style="justify-content:flex-end"></div></dd>
+        <dt>Emulated devices</dt><dd><div class="pills end" id="usb-functions"></div></dd>
       </dl></div>
     <div class="card span-12 sub">The video state comes from the local NanoKVM server's streamer status;
       the USB state is the device-mode controller as seen by the target host.</div>
@@ -318,7 +363,47 @@
       <div class="sub" style="margin-top:10px">Share of total CPU time over the last 2 s, like <code>top</code>. Only process names are shown, never command lines.</div></div>
   </section>
 
-  <footer>Live while the Dashboard App is open on the device · read-only · last 10 minutes kept in memory</footer>
+  <!-- Settings -------------------------------------------------------------->
+  <section role="tabpanel" id="tab-settings" class="grid" hidden>
+    <div class="card span-6"><h2>Panel</h2>
+      <div class="settings">
+        <div class="setting">
+          <div><div class="name" id="paging-label">Turn pages by</div>
+            <div class="sub">Swipe: swipe left or right. Tap: tap the left or right half; swiping still works.</div></div>
+          <div class="theme" role="radiogroup" aria-labelledby="paging-label">
+            <button type="button" role="radio" data-paging="swipe">Swipe</button>
+            <button type="button" role="radio" data-paging="tap">Tap</button>
+          </div>
+        </div>
+        <div class="setting">
+          <div><label class="name" for="set-screen-off">Turn the screen off</label>
+            <div class="sub">After a while without touch. The next touch only wakes it.</div></div>
+          <span class="switch"><input type="checkbox" role="switch" id="set-screen-off"><span></span></span>
+        </div>
+        <div class="setting">
+          <div><label class="name" for="set-screen-off-s">Turn off after</label></div>
+          <select id="set-screen-off-s"></select>
+        </div>
+      </div>
+      <div class="saved" id="panel-saved" role="status" aria-live="polite" style="margin-top:14px">&nbsp;</div></div>
+    <div class="card span-6"><h2>Connectivity checks</h2>
+      <form class="settings" id="probe-form" autocomplete="off" novalidate>
+        <div class="field"><label for="set-probe-host">Internet check: IP address</label>
+          <input id="set-probe-host" maxlength="45" spellcheck="false" inputmode="decimal" aria-describedby="probe-host-help probe-host-error">
+          <div class="sub" id="probe-host-help">TCP connection to port 443. An IP, so this check works even when DNS is broken.</div>
+          <div class="error" id="probe-host-error"></div></div>
+        <div class="field"><label for="set-dns-name">DNS check: host name</label>
+          <input id="set-dns-name" maxlength="253" spellcheck="false" autocapitalize="off" aria-describedby="dns-name-help dns-name-error">
+          <div class="sub" id="dns-name-help">Resolved with the device's resolver. Leave a field empty to turn that check off.</div>
+          <div class="error" id="dns-name-error"></div></div>
+        <div class="actions"><button type="submit">Save</button>
+          <span class="saved" id="probe-saved" role="status" aria-live="polite"></span></div>
+      </form></div>
+    <div class="card span-12 sub">Settings are stored on the device and apply right away. This page has no password:
+      anyone on the same network can change them while the App is open.</div>
+  </section>
+
+  <footer>Live while the Dashboard App is open on the device · last 10 minutes kept in memory</footer>
 </main>
 
 <script>
@@ -728,7 +813,9 @@ function showTab(name) {
     b.setAttribute("aria-selected", String(on));
     b.tabIndex = on ? 0 : -1;
     $("tab-" + b.dataset.tab).hidden = !on;
+    if (on) b.scrollIntoView({ block: "nearest", inline: "nearest" });  // narrow screens scroll the tab bar
   });
+  if (name === "settings") loadSettings();
   drawCharts();  // canvases have no size while their tab is hidden
 }
 document.querySelectorAll("[data-tab]").forEach((b, i, all) => {
@@ -778,6 +865,86 @@ $("tool-form").addEventListener("submit", async (ev) => {
   } finally {
     buttons.forEach((b) => { b.disabled = false; });
   }
+});
+
+// -- settings (stored on the device, shared by the panel and every browser) ---
+let settings = null;
+
+function timeoutText(sec) { return sec < 60 ? sec + " seconds" : sec / 60 + (sec === 60 ? " minute" : " minutes"); }
+
+function showSettings(data) {
+  settings = data.settings;
+  document.querySelectorAll("[data-paging]").forEach((b) => {
+    b.setAttribute("aria-checked", String(b.dataset.paging === settings.paging));
+  });
+  $("set-screen-off").checked = settings.screen_off;
+  const select = $("set-screen-off-s");
+  if (!select.options.length) {
+    for (const sec of data.options.screen_off_s) select.append(el("option", { value: sec, textContent: timeoutText(sec) }));
+  }
+  select.value = String(settings.screen_off_s);
+  select.disabled = !settings.screen_off;
+  // keep what someone is typing
+  if (document.activeElement !== $("set-probe-host")) $("set-probe-host").value = settings.probe_host;
+  if (document.activeElement !== $("set-dns-name")) $("set-dns-name").value = settings.dns_name;
+}
+
+async function loadSettings() {
+  try {
+    const res = await fetch("api/settings", { cache: "no-store" });
+    if (res.ok) showSettings(await res.json());
+  } catch (e) { /* offline: the banner says so */ }
+}
+
+// POST a partial update; returns null on success or {field: message}
+async function saveSettings(changes) {
+  try {
+    const res = await fetch("api/settings", { method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) });
+    const data = await res.json();
+    if (res.ok) { showSettings(data); return null; }
+    return data.errors || { "": data.error || "Not saved" };
+  } catch (e) {
+    return { "": "The device did not answer." };
+  }
+}
+
+async function savePanel(changes) {
+  const out = $("panel-saved");
+  const errors = await saveSettings(changes);
+  out.className = "saved" + (errors ? " error" : "");
+  out.textContent = errors ? "Not saved: " + Object.values(errors).join("; ") : "Saved";
+  if (errors) loadSettings();  // put the controls back
+}
+
+document.querySelectorAll("[data-paging]").forEach((b) => {
+  b.addEventListener("click", () => savePanel({ paging: b.dataset.paging }));
+});
+$("set-screen-off").addEventListener("change", (ev) => savePanel({ screen_off: ev.target.checked }));
+$("set-screen-off-s").addEventListener("change", (ev) => savePanel({ screen_off_s: Number(ev.target.value) }));
+
+$("probe-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const button = ev.target.querySelector("button");
+  const out = $("probe-saved");
+  const fields = [["probe_host", "set-probe-host", "probe-host-error"], ["dns_name", "set-dns-name", "dns-name-error"]];
+  const changes = {};  // only what changed, so another browser's edit survives
+  for (const [key, input] of fields) {
+    const value = $(input).value.trim();
+    if (!settings || value !== settings[key]) changes[key] = value;
+  }
+  button.disabled = true;
+  out.className = "saved";
+  out.textContent = "Saving…";
+  const errors = await saveSettings(changes);
+  button.disabled = false;
+  for (const [key, input, msg] of fields) {
+    const err = errors && errors[key];
+    $(input).setAttribute("aria-invalid", String(Boolean(err)));
+    $(msg).textContent = err ? "This " + err + "." : "";
+  }
+  out.className = "saved" + (errors ? " error" : "");
+  out.textContent = errors ? (errors[""] || "Not saved") : "Saved. The checks use the new targets within a few seconds.";
 });
 
 // -- theme: system / light / dark, remembered per browser ---------------------
@@ -850,6 +1017,7 @@ async function poll() {
     merge(data.history);
     since = data.now_seq;
     render(data.snap);
+    if (!$("tab-settings").hidden) loadSettings();  // follow changes made on the panel
     drawCharts();
     setOnline(true);
   } catch (err) {

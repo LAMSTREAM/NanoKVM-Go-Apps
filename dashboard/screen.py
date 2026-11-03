@@ -21,8 +21,9 @@ OK_BG = rgb565(14, 60, 38)
 BAD_BG = rgb565(72, 20, 26)
 QR_LIGHT = rgb565(240, 242, 246)
 
-PAGES = ["HOME", "HOST", "WEB", "HEALTH", "NETWORK", "TOP"]
+PAGES = ["HOME", "HOST", "WEB", "HEALTH", "NETWORK", "TOP", "SETTINGS"]
 TOP_PAGE = PAGES.index("TOP")
+SETTINGS_PAGE = PAGES.index("SETTINGS")
 
 GLYPHS = set(" $%-./0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
@@ -446,7 +447,44 @@ def page_top(fb, b, snap):
         y += 26
 
 
-def draw(fb, snap, page, info, history):
+# Panel settings: one row per setting; tapping a row steps to the next value.
+# Probe targets need typing, so they are only on the web page.
+
+def timeout_text(sec):
+    return "%dS" % sec if sec < 60 else "%d MIN" % (sec // 60)
+
+
+def settings_rows(fb):
+    """[(key, Rect)] of the rows on the SETTINGS page, for drawing and taps."""
+    b = Box(visible_rect(fb))
+    h = 44 if b.compact else 52
+    return [(key, Rect(b.x, b.top + i * (h + 6), b.w, h))
+            for i, key in enumerate(("paging", "screen_off", "screen_off_s"))]
+
+
+def page_settings(fb, b, values):
+    rows = settings_rows(fb)
+    shown = {
+        "paging": ("PAGING", values["paging"].upper(), True),
+        "screen_off": ("AUTO OFF", "ON" if values["screen_off"] else "OFF",
+                       True),
+        "screen_off_s": ("AFTER", timeout_text(values["screen_off_s"]),
+                         values["screen_off"]),
+    }
+    for key, r in rows:
+        label, value, active = shown[key]
+        card(fb, r.x, r.y, r.w, r.h)
+        ty = r.y + (r.h - 16) // 2
+        text(fb, r.x + 10, ty, label, DIM if active else GRID)
+        text_right(fb, r.x + r.w - 10, ty, value,
+                   ACCENT if active else GRID, 2)
+    y = rows[-1][1].y + rows[-1][1].h + 10
+    if y + 20 <= b.bottom:
+        fb.draw_text(b.x + 2, y, "TAP A ROW TO CHANGE IT", DIM, 1)
+        fb.draw_text(b.x + 2, y + 12, "PROBE TARGETS: WEB PAGE", DIM, 1)
+
+
+def draw(fb, snap, page, info, history, values):
     """Render one page of snap into the back buffer."""
     area = visible_rect(fb)
     b = Box(area)
@@ -464,8 +502,10 @@ def draw(fb, snap, page, info, history):
         page_health(fb, b, snap, history)
     elif name == "NETWORK":
         page_network(fb, b, snap)
-    else:
+    elif name == "TOP":
         page_top(fb, b, snap)
+    else:
+        page_settings(fb, b, values)
 
     # page indicator: active page is a wider accent pill
     widths = [12 if i == page else 4 for i in range(len(PAGES))]

@@ -488,9 +488,12 @@ def result(target, ok, ms=None, method="none"):
 class Prober:
     """Background connectivity checks; publishes by swapping self.result.
 
-    Ownership: only the prober thread replaces self.result and only the DNS
-    worker writes self._dns (under self._lock). Readers get a fresh dict from
-    view(), never a live reference.
+    Ownership: self.result is replaced under self._lock, by the prober thread
+    after each round and by configure() when the settings change targets.
+    self._dns is written under the lock by the DNS worker and configure().
+    A round that started before a target change never publishes a result
+    for the old target. Readers get a fresh dict from view(), never a live
+    reference.
     """
 
     def __init__(self, probe_host, dns_name, root="/"):
@@ -507,6 +510,7 @@ class Prober:
         self._lock = threading.Lock()
         self._dns = result(dns_name or None, None, method="dns")
         self._dns_started = None  # monotonic start of the in-flight lookup
+        self._dns_gen = 0  # bumped when the DNS name changes
         self.result = {
             "gateway": result(None, None),
             "internet": result(probe_host, None, method="tcp"),
@@ -515,6 +519,21 @@ class Prober:
 
     def start(self):
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def configure(self, probe_host, dns_name):
+        """Switch targets (settings changed); their results start over as unknown."""
+        with self._lock:
+            res = dict(self.result)
+            if probe_host != self.probe_host:
+                self.probe_host = probe_host
+                res["internet"] = result(probe_host or None, None, method="tcp")
+            if dns_name != self.dns_name:
+                self.dns_name = dns_name
+                self._dns_gen += 1  # a lookup still running for the old name is ignored
+                self._dns_started = None
+                self._dns = result(dns_name or None, None, method="dns")
+                res["dns"] = dict(self._dns)
+            self.result = res
 
     def view(self):
         """Copy of the latest results with age_s instead of timestamps."""
@@ -546,8 +565,10 @@ class Prober:
         self.refresh_video()
         self.kick_dns()
         with self._lock:
-            dns = dict(self._dns)
-        self.result = {"gateway": gateway, "internet": internet, "dns": dns}
+            if internet["target"] != (self.probe_host or None):
+                internet = self.result["internet"]  # target changed meanwhile
+            self.result = {"gateway": gateway, "internet": internet,
+                           "dns": dict(self._dns)}
 
     def probe_gateway(self, gw):
         if not gw:
@@ -568,10 +589,11 @@ class Prober:
         return result(gw, ok, parse_ping_ms(p.stdout) if ok else None, "ping")
 
     def probe_internet(self):
-        if not self.probe_host:
+        host = self.probe_host  # read once: configure() may change it meanwhile
+        if not host:
             return result(None, None)
-        outcome, ms = tcp_probe(self.probe_host, 443, 2.0)
-        return result(self.probe_host, outcome in ("ok", "refused"), ms, "tcp")
+        outcome, ms = tcp_probe(host, 443, 2.0)
+        return result(host, outcome in ("ok", "refused"), ms, "tcp")
 
     def refresh_tailscale(self):
         # the interface is read on every sample; the CLI is only a fallback
@@ -626,30 +648,34 @@ class Prober:
 
     def kick_dns(self):
         """Start a lookup unless one is in flight (single-flight)."""
-        if not self.dns_name:
-            return
         now = time.monotonic()
         with self._lock:
+            name, gen = self.dns_name, self._dns_gen
+            if not name:
+                return
             if self._dns_started is not None:
                 if now - self._dns_started > DNS_TIMEOUT \
                         and self._dns["ok"] is not False:
-                    self._dns = result(self.dns_name, False, method="dns")
+                    self._dns = result(name, False, method="dns")
                 return
             self._dns_started = now
-        threading.Thread(target=self._resolve, args=(now,), daemon=True).start()
+        threading.Thread(target=self._resolve, args=(now, name, gen),
+                         daemon=True).start()
 
-    def _resolve(self, started):
+    def _resolve(self, started, name, gen):
         try:
-            socket.getaddrinfo(self.dns_name, None, socket.AF_INET)
+            socket.getaddrinfo(name, None, socket.AF_INET)
             ok = True
         except (OSError, UnicodeError):
             ok = False
         elapsed = time.monotonic() - started
         with self._lock:
+            if gen != self._dns_gen:  # name changed while this lookup ran
+                return
             self._dns_started = None
             if elapsed > DNS_TIMEOUT:  # too slow counts as failed, even if it resolved
                 ok = False
-            self._dns = result(self.dns_name, ok,
+            self._dns = result(name, ok,
                                round(elapsed * 1000, 1) if ok else None, "dns")
 
 

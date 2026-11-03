@@ -1,10 +1,10 @@
 {
-  "app_id": "com.sipeed.dashboard",
+  "app_id": "com.lamstream.dashboard",
   "name": "Dashboard",
-  "creator": "NanoKVM Team",
+  "creator": "LAMSTREAM",
   "create_time": "2026-10-30",
-  "version": "1.0.0",
-  "desc": "Read-only dashboard for the device and its target host, on screen and in the browser.",
+  "version": "1.1.0",
+  "desc": "Dashboard for the device and its target host, on screen and in the browser.",
   "category": "tools",
   "env": {
     "DASHBOARD_WEB_PORT": {
@@ -12,18 +12,6 @@
       "description": "HTTP port for the status page, served only while the App is open.",
       "required": true,
       "default": "8080"
-    },
-    "DASHBOARD_PROBE_HOST": {
-      "label": "Internet probe IP",
-      "description": "IP address checked with a TCP connection to port 443. IP only, so the check does not depend on DNS.",
-      "required": false,
-      "default": "1.1.1.1"
-    },
-    "DASHBOARD_DNS_NAME": {
-      "label": "DNS probe name",
-      "description": "Host name resolved to check DNS.",
-      "required": false,
-      "default": "www.sipeed.com"
     }
   }
 }

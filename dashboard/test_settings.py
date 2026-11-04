@@ -3,7 +3,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -230,16 +232,18 @@ class SlideTest(unittest.TestCase):
 def import_main():
     """main.py needs appbase, which only exists on the device; stub it."""
     import types
-    if "appbase" not in sys.modules:
-        try:
-            import appbase  # noqa: F401
-        except ImportError:
-            stub = types.ModuleType("appbase")
-            stub.LEFT, stub.RIGHT, stub.WHITE = "left", "right", 0xFFFF
-            stub.rgb565 = lambda r, g, b: 0
-            stub.Rect = object
-            stub.app = lambda: (lambda f: f)
-            sys.modules["appbase"] = stub
+    try:
+        import appbase
+        real = hasattr(appbase, "app")  # not a stray namespace package
+    except ImportError:
+        real = False
+    if not real:
+        stub = types.ModuleType("appbase")
+        stub.LEFT, stub.RIGHT, stub.TAP, stub.WHITE = "left", "right", "tap", 0xFFFF
+        stub.rgb565 = lambda r, g, b: 0
+        stub.Rect = object
+        stub.app = lambda: (lambda f: f)
+        sys.modules["appbase"] = stub
     import main
     return main
 
@@ -266,6 +270,170 @@ class HostTest(unittest.TestCase):
         self.assertTrue(is_json({"Content-Type": "application/json; charset=utf-8"}))
         self.assertFalse(is_json({"Content-Type": "text/plain"}))
         self.assertFalse(is_json({}))
+
+
+def sample_snap(**over):
+    snap = {
+        "hostname": "kvm", "ip": "192.168.1.5", "tailscale_ip": None,
+        "cpu": 10.0, "mem": {"used": 1, "total": 4}, "temp": 40.0,
+        "rx_rate": 0.0, "tx_rate": 0.0, "uptime": 100,
+        "ifaces": [{"name": "eth0", "state": "up", "ip": "192.168.1.5",
+                    "wifi_dbm": None, "default": True}],
+        "probes": {k: {"target": "x", "ok": True, "ms": 1.2}
+                   for k in ("gateway", "internet", "dns")},
+        "video": {"signal": True, "online": False, "resolution": "1920x1080",
+                  "fps": 60, "watched": False},
+        "usb": {"state": "configured", "speed": "high-speed"},
+        "procs": None,
+    }
+    snap.update(over)
+    return snap
+
+
+class HistoryTest(unittest.TestCase):
+    def test_gap_adds_empty_points(self):
+        h = collector.History(maxlen=10)
+        h.append(sample_snap())
+        h.gap(3)
+        h.append(sample_snap())
+        now, cols = h.since(0)
+        self.assertEqual(now, 5)
+        self.assertEqual(cols["cpu"], [10.0, None, None, None, 10.0])
+
+    def test_gap_is_capped_by_the_buffer(self):
+        h = collector.History(maxlen=4)
+        h.gap(1000)
+        self.assertEqual(h.seq, 4)
+
+    def test_since_upto(self):
+        h = collector.History()
+        for _ in range(5):
+            h.append(sample_snap())
+        now, cols = h.since(1, upto=3)
+        self.assertEqual((now, cols["seq"]), (3, [2, 3]))
+
+
+class StatusCacheTest(unittest.TestCase):
+    def test_one_encoding_per_sample_and_since(self):
+        main = import_main()
+        h = collector.History()
+        latest = {"cur": (h.append(sample_snap()), sample_snap())}
+        cache = main.StatusCache(h, latest, "b00t")
+        first = cache.get(0)
+        self.assertIs(cache.get(0), first)  # shared by every page in step
+        body = json.loads(first + b"}")
+        self.assertEqual(body["now_seq"], 1)
+        self.assertEqual(body["snap"]["ip"], "192.168.1.5")
+        hist = json.loads(cache.get(0, with_snap=False) + b"}")
+        self.assertNotIn("snap", hist)
+        latest["cur"] = (h.append(sample_snap(cpu=50.0)), sample_snap(cpu=50.0))
+        again = json.loads(cache.get(1) + b"}")
+        self.assertEqual(again["history"]["cpu"], [50.0])
+        self.assertEqual(again["snap"]["cpu"], 50.0)
+
+    def test_history_never_runs_past_the_published_snapshot(self):
+        main = import_main()
+        h = collector.History()
+        latest = {"cur": (h.append(sample_snap()), sample_snap())}
+        h.append(sample_snap())  # appended, not yet published
+        body = json.loads(main.StatusCache(h, latest, "b").get(0) + b"}")
+        self.assertEqual(body["now_seq"], 1)
+
+    def test_entries_are_bounded(self):
+        main = import_main()
+        h = collector.History()
+        latest = {"cur": (h.append(sample_snap()), sample_snap())}
+        cache = main.StatusCache(h, latest, "b")
+        for since in range(100):
+            cache.get(since)
+        self.assertLessEqual(len(cache._entries), cache.MAX)
+
+
+class WakerTest(unittest.TestCase):
+    def test_wake_ends_the_wait(self):
+        waker = import_main().Waker()
+        self.addCleanup(waker._r.close)
+        self.addCleanup(waker._w.close)
+        waker.wake()
+        t = time.monotonic()
+        waker.wait([], 5.0)
+        self.assertLess(time.monotonic() - t, 1.0)
+        t = time.monotonic()
+        waker.wait([], 0.05)  # drained: the next wait runs to its timeout
+        self.assertGreaterEqual(time.monotonic() - t, 0.04)
+
+
+class PageKeyTest(unittest.TestCase):
+    def setUp(self):
+        import_main()
+        import screen
+        self.screen = screen
+        self.info = {"port": 8080, "web_error": "", "path": "/"}
+
+    def key(self, name, snap, values=settings.DEFAULTS):
+        return self.screen.page_key(snap, self.screen.PAGES.index(name),
+                                    self.info, values)
+
+    def test_unshown_fields_keep_the_key(self):
+        base = sample_snap()
+        busy = sample_snap(cpu=99.0, temp=80.0, uptime=999,
+                           mem={"used": 3, "total": 4})
+        for name in ("HOME", "HOST", "WEB", "NETWORK", "SETTINGS"):
+            self.assertEqual(self.key(name, base), self.key(name, busy), name)
+
+    def test_shown_fields_change_the_key(self):
+        base = sample_snap()
+        changes = {
+            "HOME": sample_snap(tailscale_ip="100.64.0.1"),
+            "HOST": sample_snap(video=dict(base["video"], fps=30)),
+            "WEB": sample_snap(ip="10.0.0.2"),
+            "NETWORK": sample_snap(probes=dict(base["probes"], dns={
+                "target": "x", "ok": True, "ms": 9.0})),
+            "TOP": sample_snap(procs=[{"name": "a", "cpu": 1.0}]),
+        }
+        for name, snap in changes.items():
+            self.assertNotEqual(self.key(name, base), self.key(name, snap), name)
+        self.assertNotEqual(
+            self.key("SETTINGS", base),
+            self.key("SETTINGS", base, dict(settings.DEFAULTS, paging="tap")))
+
+    def test_pages_differ_and_health_always_redraws(self):
+        snap = sample_snap()
+        keys = [self.key(n, snap) for n in self.screen.PAGES if n != "HEALTH"]
+        self.assertEqual(len(set(keys)), len(keys))
+        self.assertIsNone(self.key("HEALTH", snap))
+
+
+class StaleProbeTest(unittest.TestCase):
+    def test_slow_but_current_results_stay(self):
+        p = collector.Prober("1.1.1.1", "")
+        r = collector.result("1.1.1.1", False, None, "tcp")
+        r["at"] -= collector.PROBE_STALE + 1  # e.g. a lookup hanging for 20 s
+        p.result["internet"] = r
+        self.assertIs(p.view()["internet"]["ok"], False)
+
+    def test_long_idle_forgets_results(self):
+        looking = [False]
+        p = collector.Prober("1.1.1.1", "x.example", active=lambda: looking[0])
+        p.result["internet"] = collector.result("1.1.1.1", True, 3.0, "tcp")
+        seen = []
+        p.run_once = lambda: seen.append(p.view()["internet"]["ok"])
+        with patch.object(collector, "PROBE_STALE", 0.1):
+            p.start()
+            time.sleep(1.3)  # idle longer than PROBE_STALE
+            looking[0] = True
+            p.kick()
+            time.sleep(0.3)
+        self.assertEqual(seen[:1], [None])
+        self.assertEqual(p.view()["internet"]["target"], "1.1.1.1")
+
+    def test_idle_prober_does_not_probe(self):
+        rounds = []
+        p = collector.Prober("", "", active=lambda: False)
+        p.run_once = lambda: rounds.append(1)
+        p.start()
+        time.sleep(0.3)
+        self.assertEqual(rounds, [])
 
 
 if __name__ == "__main__":

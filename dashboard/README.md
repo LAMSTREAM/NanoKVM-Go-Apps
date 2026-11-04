@@ -127,12 +127,26 @@ settings to change). `POST` requests must be sent as `application/json`.
 
 ## Performance
 
-The App samples once per second, but only reads cheap `/proc` and `/sys`
-files on that path. Slow work (network probes, DNS, `ping`, `iw`, the local
-streamer status, `tailscale`) runs in a background thread every 5 seconds.
-Web-only details (services, Tailscale, DNS servers) are refreshed every 15
-seconds and the process list every 2 seconds, and only while the web page (or,
-for processes, the TOP page on a lit panel) is open.
+The App only works while someone is looking: the panel is lit, or a web page
+polled in the last 10 seconds. While the panel is dark and no page is open,
+nothing is sampled, probed or drawn, and the App sleeps until a touch or a
+web request. Charts show a gap for that time instead of made-up values; the
+first web request after a quiet spell waits for a fresh sample (up to 1.5 s).
+
+- **Sampling:** once per second, cheap `/proc` and `/sys` reads only.
+- **Probes:** slow work (network checks, DNS, `ping`, `iw`, the local
+  streamer status, `tailscale`) runs in a background thread every 5 seconds.
+  Results older than 15 seconds show as unknown.
+- **Web-only details:** services, Tailscale and DNS servers refresh every 15
+  seconds, and the process list every 2 seconds. Both only run while a web
+  page is open; the process list also runs while the TOP page is lit.
+- **Panel:** each page is redrawn only when what it shows changed (HEALTH
+  every second, the others usually far less often), and the framebuffer is
+  only written after a redraw. Between samples the App waits on the touch
+  device instead of polling it.
+- **Web page:** every open page polls every 2 seconds, and pages in step share
+  one encoded reply per sample. Settings come with that reply. A page in a
+  hidden browser tab stops polling.
 
 ## Connectivity checks
 
@@ -177,6 +191,6 @@ python -m unittest discover -s dashboard -p "test_*.py"
 `collector.py`, `settings.py` and `slide.py` only use the Python standard
 library and import on any OS. The collector's parsers take file text, so they
 can be tested without a device; the slide tests use a fake framebuffer in
-every rotation. `DASHBOARD_DEBUG=1` prints the longest UI tick every 10
-seconds to stderr. The screenshots in `_docs/dashboard/` use made-up
-addresses.
+every rotation. `DASHBOARD_DEBUG=1` prints the longest sample-and-redraw
+time every 10 seconds to stderr. The screenshots in `_docs/dashboard/` use
+made-up addresses.

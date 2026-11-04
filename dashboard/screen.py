@@ -484,6 +484,45 @@ def page_settings(fb, b, values):
         fb.draw_text(b.x + 2, y + 12, "PROBE TARGETS: WEB PAGE", DIM, 1)
 
 
+def page_key(snap, page, info, values):
+    """Everything a page shows, or None if it changes on every sample.
+
+    Equal keys draw equal pixels, so the panel can skip the redraw. Keep each
+    entry in step with what its page_* function reads.
+    """
+    name = PAGES[page]
+    probes = snap["probes"]
+    if name == "HOME":
+        default = next((i for i in snap["ifaces"] if i["default"]), None)
+        video, usb = snap.get("video"), snap.get("usb")
+        return (name, snap["ip"], snap["tailscale_ip"], snap["hostname"],
+                default and (default["name"], default["wifi_dbm"]),
+                tuple(probes[k]["ok"] for k in ("gateway", "internet", "dns")),
+                video and video["signal"], usb and usb["state"])
+    if name == "HOST":
+        video, usb = snap.get("video"), snap.get("usb")
+        return (name,
+                video and (video["signal"], video["online"],
+                           video["resolution"], video["fps"], video["watched"]),
+                usb and (usb["state"], usb["speed"]))
+    if name == "WEB":
+        return (name, snap["ip"], info["port"], info["web_error"])
+    if name == "NETWORK":
+        return (name,
+                tuple((p["target"], p["ok"],
+                       None if p["ms"] is None else round(p["ms"]))
+                      for p in (probes[k] for k in ("gateway", "internet", "dns"))),
+                tuple((i["name"], i["state"], i["ip"], i["wifi_dbm"], i["default"])
+                      for i in snap["ifaces"]))
+    if name == "TOP":
+        procs = snap["procs"]
+        return (name, procs and tuple((p["name"], p["cpu"]) for p in procs))
+    if name == "SETTINGS":
+        return (name, values["paging"], values["screen_off"],
+                values["screen_off_s"])
+    return None  # HEALTH: CPU and its sparkline move every second
+
+
 def draw(fb, snap, page, info, history, values):
     """Render one page of snap into the back buffer."""
     area = visible_rect(fb)

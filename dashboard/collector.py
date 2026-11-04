@@ -25,6 +25,7 @@ from collections import deque
 
 HISTORY_LEN = 600
 PROBE_PERIOD = 5.0
+PROBE_STALE = 3 * PROBE_PERIOD  # idle longer than this: results start over
 DNS_TIMEOUT = 3.0
 TAILSCALE_REFRESH = 30.0
 STREAMER_URL = "https://127.0.0.1/api/streamer/local"
@@ -496,7 +497,9 @@ class Prober:
     reference.
     """
 
-    def __init__(self, probe_host, dns_name, root="/"):
+    def __init__(self, probe_host, dns_name, root="/", active=lambda: True):
+        self.active = active  # callable: is anyone looking? if not, sleep
+        self._kick = threading.Event()  # start a round now
         self.probe_host = probe_host
         self.dns_name = dns_name
         self.root = root
@@ -507,6 +510,11 @@ class Prober:
         self.wifi = {}  # iface -> parse_iw_link() result, replaced as a whole
         self.video = None  # parse_streamer() result, replaced as a whole
         self._ts_checked = -TAILSCALE_REFRESH
+        # built once: create_default_context() would load the CA store on
+        # every round, and the loopback server's certificate is self-signed
+        self._ssl = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self._ssl.check_hostname = False
+        self._ssl.verify_mode = ssl.CERT_NONE
         self._lock = threading.Lock()
         self._dns = result(dns_name or None, None, method="dns")
         self._dns_started = None  # monotonic start of the in-flight lookup
@@ -545,15 +553,42 @@ class Prober:
             out[key] = item
         return out
 
+    def kick(self):
+        """Run a round now instead of at the end of the current wait."""
+        self._kick.set()
+
+    def forget(self):
+        """Drop every result: they are from before an idle spell."""
+        with self._lock:
+            self._dns = result(self.dns_name or None, None, method="dns")
+            self.result = {
+                "gateway": result(None, None),
+                "internet": result(self.probe_host or None, None, method="tcp"),
+                "dns": dict(self._dns),
+            }
+        self.video = None
+
     def _loop(self):
+        idle_since = None
         while True:
+            if not self.active():  # nobody looking: no probes at all
+                if idle_since is None:
+                    idle_since = time.monotonic()
+                self._kick.wait(1.0)
+                self._kick.clear()
+                continue
+            if idle_since is not None:
+                if time.monotonic() - idle_since > PROBE_STALE:
+                    self.forget()  # unknown until this round, not old news
+                idle_since = None
             t0 = time.monotonic()
             try:
                 self.run_once()
             except Exception as e:  # keep probing; one bad round must not end it
                 print("dashboard: probe error %r" % e, file=sys.stderr,
                       flush=True)
-            time.sleep(max(0.0, PROBE_PERIOD - (time.monotonic() - t0)))
+            self._kick.wait(max(0.0, PROBE_PERIOD - (time.monotonic() - t0)))
+            self._kick.clear()
 
     def run_once(self):
         _, gw = parse_default_route(
@@ -638,10 +673,8 @@ class Prober:
     def refresh_video(self):
         """HDMI capture state from the local NanoKVM-Server (no login needed)."""
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False  # loopback, self-signed certificate
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(STREAMER_URL, timeout=2, context=ctx) as r:
+            with urllib.request.urlopen(STREAMER_URL, timeout=2,
+                                        context=self._ssl) as r:
                 self.video = parse_streamer(json.loads(r.read().decode()))
         except (OSError, ValueError):
             self.video = None
@@ -707,11 +740,19 @@ class History:
                                  _round(snap.get("tx_rate"))))
             return self.seq
 
-    def since(self, seq):
-        """Columns of all points newer than seq."""
+    def gap(self, n):
+        """n empty points for seconds that were not sampled (nobody looked),
+        so charts show a break instead of joining across it."""
         with self._lock:
-            pts = [p for p in self._points if p[0] > seq]
-            now = self.seq
+            for _ in range(min(n, self._points.maxlen)):
+                self.seq += 1
+                self._points.append((self.seq,) + (None,) * len(HISTORY_FIELDS))
+
+    def since(self, seq, upto=None):
+        """Columns of the points newer than seq (and not newer than upto)."""
+        with self._lock:
+            now = self.seq if upto is None else min(upto, self.seq)
+            pts = [p for p in self._points if seq < p[0] <= now]
         cols = {"seq": [p[0] for p in pts]}
         for i, name in enumerate(HISTORY_FIELDS, 1):
             cols[name] = [p[i] for p in pts]

@@ -879,7 +879,7 @@ function showSettings(data) {
   });
   $("set-screen-off").checked = settings.screen_off;
   const select = $("set-screen-off-s");
-  if (!select.options.length) {
+  if (!select.options.length && data.options) {
     for (const sec of data.options.screen_off_s) select.append(el("option", { value: sec, textContent: timeoutText(sec) }));
   }
   select.value = String(settings.screen_off_s);
@@ -1017,14 +1017,25 @@ async function poll() {
     merge(data.history);
     since = data.now_seq;
     render(data.snap);
-    if (!$("tab-settings").hidden) loadSettings();  // follow changes made on the panel
+    // settings ride along with the status, so changes made on the panel show up
+    if (data.settings && !$("tab-settings").hidden) showSettings({ settings: data.settings });
     drawCharts();
     setOnline(true);
   } catch (err) {
     setOnline(false);
   }
-  setTimeout(poll, POLL_MS);
+  schedule();
 }
+
+// Only poll while the page is visible: a hidden tab must not keep the device
+// sampling. Returning to the tab polls at once.
+let timer = null;
+function schedule() {
+  timer = document.hidden ? null : setTimeout(poll, POLL_MS);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && timer === null) { timer = 0; poll(); }
+});
 poll();
 </script>
 </body>
